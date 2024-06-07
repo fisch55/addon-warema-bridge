@@ -1,6 +1,6 @@
 {
   "name": "Warema Bridge - Fisch",
-  "version": "0.97",
+  "version": "0.98",
   "slug": "warema_bridge_fisch",
   "description": "Control Warema WMS system",
   "arch": ["aarch64", "amd64", "armv7", "i386"],
