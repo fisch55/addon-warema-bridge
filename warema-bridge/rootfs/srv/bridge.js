@@ -191,7 +191,7 @@ function callback(err, msg) {
             state_topic: 'warema/' + msg.payload.weather.snr + '/illuminance/state',
             device_class: 'illuminance',
             unique_id: msg.payload.weather.snr + '_illuminance',
-            unit_of_measurement: 'lm',
+            unit_of_measurement: 'lx',
           }
           client.publish('homeassistant/sensor/' + msg.payload.weather.snr + '/illuminance/config', JSON.stringify(illuminance_payload))
 
