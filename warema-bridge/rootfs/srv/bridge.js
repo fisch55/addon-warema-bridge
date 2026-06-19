@@ -19,6 +19,13 @@ const settingsPar = {
 
 var registered_shades = []
 var shade_position = []
+var device_class = {}   // snr -> 'cover' | 'switch'  (so the command handler knows how to react)
+
+// Warema plug receivers are simple on/off devices, but the warema-wms-api only
+// speaks "blind position". We therefore map HA's ON/OFF onto a blind position.
+// If your plug ends up inverted (HA "ON" switches it off), swap these two values.
+const SWITCH_ON_POSITION  = 100
+const SWITCH_OFF_POSITION = 0
 
 function registerDevice(element) {
   console.log('Registering ' + element.snr)
@@ -43,6 +50,45 @@ function registerDevice(element) {
     manufacturer: "Warema",
     name: element.snr
   }
+
+  // --- Switch / plug receiver ------------------------------------------------
+  // Register Warema plugs as an on/off switch instead of a cover.
+  // Triggered by type:'switch' (manual registration) or the Warema plug-receiver
+  // device type (hex '21') if device scanning is used.
+  if (element.type === 'switch' || parseInt(element.type) === 21) {
+    var switch_topic = 'homeassistant/switch/' + element.snr + '/' + element.snr + '/config'
+    var switch_payload = {
+      ...base_payload,
+      device: {
+        ...base_device,
+        model: 'Plug receiver'
+      },
+      device_class: 'outlet',
+      command_topic: 'warema/' + element.snr + '/set',
+      state_topic:   'warema/' + element.snr + '/state',
+      payload_on:  'ON',
+      payload_off: 'OFF',
+      state_on:    'ON',
+      state_off:   'OFF',
+      optimistic:  false
+    }
+
+    if (ignoredDevices.includes(element.snr.toString())) {
+      console.log('Ignoring and removing device ' + element.snr + ' (switch)')
+    } else {
+      console.log('Adding switch ' + element.snr)
+      stickUsb.vnBlindAdd(parseInt(element.snr), element.name)
+      registered_shades += element.snr
+      device_class[element.snr] = 'switch'
+      client.publish(availability_topic, 'online', {retain: true})
+    }
+    client.publish(switch_topic, JSON.stringify(switch_payload))
+    // Remove the stale cover entity this plug used to be registered as.
+    // (empty retained payload tells HA to drop the old discovery)
+    client.publish('homeassistant/cover/' + element.snr + '/' + element.snr + '/config', '', {retain: true})
+    return
+  }
+  // ---------------------------------------------------------------------------
 
   var model
   var payload
@@ -130,15 +176,16 @@ function registerDevice(element) {
 
     stickUsb.vnBlindAdd(parseInt(element.snr), element.name);
     registered_shades += element.snr
+    device_class[element.snr] = 'cover'
     client.publish(availability_topic, 'online', {retain: true})
   }
   client.publish(topic, JSON.stringify(payload))
 }
 
 function registerDevices() {
-  registerDevice({snr: 00994624, name:"Markise"  , type:25 })
-  registerDevice({snr: 01140790, name:"PowerPlug1", type:25 })
-  registerDevice({snr: 01399553, name:"PowerPlug2", type:25 })
+  registerDevice({snr: 00994624, name:"Markise"   , type:25 })
+  registerDevice({snr: 01140790, name:"PowerPlug1", type:'switch' })
+  registerDevice({snr: 01399553, name:"PowerPlug2", type:'switch' })
   //registerDevice({snr: 01185462, name:"Handsender", type:07})
 
   return;
@@ -224,8 +271,13 @@ function callback(err, msg) {
         }
         break
       case 'wms-vb-blind-position-update':
-        client.publish('warema/' + msg.payload.snr + '/position', msg.payload.position.toString())
-        client.publish('warema/' + msg.payload.snr + '/tilt', msg.payload.angle.toString())
+        if (device_class[msg.payload.snr] === 'switch') {
+          client.publish('warema/' + msg.payload.snr + '/state',
+            (msg.payload.position >= 50 ? 'ON' : 'OFF'), {retain: true})
+        } else {
+          client.publish('warema/' + msg.payload.snr + '/position', msg.payload.position.toString())
+          client.publish('warema/' + msg.payload.snr + '/tilt', msg.payload.angle.toString())
+        }
         shade_position[msg.payload.snr] = {
           position: msg.payload.position,
           angle: msg.payload.angle
@@ -292,6 +344,19 @@ client.on('message', function (topic, message) {
     }
     switch (command) {
       case 'set':
+        if (device_class[device] === 'switch') {
+          switch (message.toString()) {
+            case 'ON':
+              stickUsb.vnBlindSetPosition(device, SWITCH_ON_POSITION, 0)
+              client.publish('warema/' + device + '/state', 'ON', {retain: true})
+              break;
+            case 'OFF':
+              stickUsb.vnBlindSetPosition(device, SWITCH_OFF_POSITION, 0)
+              client.publish('warema/' + device + '/state', 'OFF', {retain: true})
+              break;
+          }
+          break
+        }
         switch (message.toString()) {
           case 'CLOSE':
             stickUsb.vnBlindSetPosition(device, 100, 0)
